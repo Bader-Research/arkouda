@@ -347,9 +347,19 @@ class SuffixArrayTest(ArkoudaTest):
     def setUp(self):
         ArkoudaTest.setUp(self)
         base_words1 = ak.random_strings_uniform(1, 10, UNIQUE, characters='printable')
+	print("base_worlds={}".format(base_words1)
+    # generate  a  Strings object
         base_words2 = ak.random_strings_lognormal(2, 0.25, UNIQUE, characters='printable')
+        #base_words1 = ak.random_strings_uniform(1, 10, UNIQUE, characters='printable')
+        #base_words2 = ak.random_strings_lognormal(2, 0.25, UNIQUE, characters='printable')
         base_sas1 = ak.suffix_array(base_words1)
         base_sas2 = ak.suffix_array(base_words2)
+        self.base_words = base_words1
+        self.np_base_words = np.hstack(base_words1.to_ndarray())
+        choices = ak.randint(0, self.base_words.size, N)
+        self.sarrays = base_sas1
+        self.test_sas = self.sarrays.to_ndarray()
+        #self.cat = ak.Categorical(self.sarrays)
         '''
         gremlins = ak.array([' ', ''])
         self.base_words = ak.concatenate((base_words1, base_words2, gremlins))
@@ -362,7 +372,6 @@ class SuffixArrayTest(ArkoudaTest):
         self.delim =  np.random.choice(x, p=(np.array(w)/sum(w)))
         self.akset = set(ak.unique(self.sarrays).to_ndarray())
         '''
-
     def test_compare_sarrays(self):
         assert compare_sarrays(self.base_words.to_ndarray(), self.np_base_words)
     
