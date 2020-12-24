@@ -940,10 +940,12 @@ class SArrays:
         repMsg = generic_msg(msg)
         return create_pdarray(repMsg)
 
-    def __eq__(self, other) -> bool:
+#    def __eq__(self, other) -> bool:
+    def __eq__(self, other) -> pdarray:
         return self._binop(other, "==")
 
-    def __ne__(self, other : object) -> bool:
+#    def __ne__(self, other : object) -> bool:
+    def __ne__(self, other : object) -> pdarray:
         return self._binop(other, "!=")
 
     def __getitem__(self, key):
