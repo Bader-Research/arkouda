@@ -9,8 +9,15 @@ module SegmentedMsg {
   use MultiTypeSymEntry;
   use RandArray;
   use IO;
-  use GenSymIO only jsonToPdArray;
+  use GenSymIO only jsonToPdArray,jsonToPdArrayInt;
 
+  use SymArrayDmap;
+  use SACA;
+  use Random;
+  use RadixSortLSD only radixSortLSD_ranks;
+
+
+  private config const DEBUG = false;
   const smLogger = new Logger();
   
   if v {
@@ -28,6 +35,8 @@ module SegmentedMsg {
       var segName = st.nextName();
       var valName = st.nextName();
       var repMsg: string;
+      smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),
+             "dist: %s segName: %t valName: %t".format(dist.toLower(),segName,valName));
       select dist.toLower() {
           when "uniform" {
               var minLen = arg1str:int;
@@ -58,8 +67,11 @@ module SegmentedMsg {
               smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),repMsg);      
           }
       }
+      smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);      
       return repMsg;
   }
+
+
 
   proc segmentLengthsMsg(cmd: string, payload: bytes, 
                                           st: borrowed SymTab): string throws {
@@ -71,6 +83,10 @@ module SegmentedMsg {
     st.check(valName);
     
     var rname = st.nextName();
+    smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),
+            "cmd: %s objtype: %t segName: %t valName: %t".format(
+                   cmd,objtype,segName,valName));
+
     select objtype {
       when "str" {
         var strings = new owned SegString(segName, valName, st);
@@ -78,52 +94,75 @@ module SegmentedMsg {
         // Do not include the null terminator in the length
         lengths.a = strings.getLengths() - 1;
       }
+      when "int" {
+        var sarrays = new owned SegSArray(segName, valName, st);
+        var lengths = st.addEntry(rname, sarrays.size, int);
+        // Do not include the null terminator in the length
+        lengths.a = sarrays.getLengths() - 1;
+      }
       otherwise {
           var errorMsg = notImplementedError(pn, "%s".format(objtype));
           smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);                      
           return errorMsg;
       }
     }
-    return "created "+st.attrib(rname);
+    var returnMsg = "created "+st.attrib(rname);
+    
+    smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),returnMsg);
+    return returnMsg;
   }
 
   proc segmentedEfuncMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
-    var pn = Reflection.getRoutineName();
-    var repMsg: string;
-    var (subcmd, objtype, segName, valName, valtype, valStr) = payload.decode().splitMsgToTuple(6);
+      var pn = Reflection.getRoutineName();
+      var repMsg: string;
+      var (subcmd, objtype, segName, valName, valtype, valStr) = 
+                                              payload.decode().splitMsgToTuple(6);
 
-    // check to make sure symbols defined
-    st.check(segName);
-    st.check(valName);
+      // check to make sure symbols defined
+      st.check(segName);
+      st.check(valName);
 
-    var json = jsonToPdArray(valStr, 1);
-    var val = json[json.domain.low];
-    var rname = st.nextName();
-    select (objtype, valtype) {
-    when ("str", "str") {
-      var strings = new owned SegString(segName, valName, st);
-      select subcmd {
-        when "contains" {
-          var truth = st.addEntry(rname, strings.size, bool);
-          truth.a = strings.substringSearch(val, SearchMode.contains);
-          repMsg = "created "+st.attrib(rname);
+      var json = jsonToPdArray(valStr, 1);
+      var val = json[json.domain.low];
+      var rname = st.nextName();
+    
+      smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),
+                         "cmd: %s subcmd: %s objtype: %t valtype: %t".format(
+                          cmd,subcmd,objtype,valtype));
+    
+        select (objtype, valtype) {
+          when ("str", "str") {
+            var strings = new owned SegString(segName, valName, st);
+            select subcmd {
+                when "contains" {
+                var truth = st.addEntry(rname, strings.size, bool);
+                truth.a = strings.substringSearch(val, SearchMode.contains);
+                repMsg = "created "+st.attrib(rname);
+            }
+            when "startswith" {
+                var truth = st.addEntry(rname, strings.size, bool);
+                truth.a = strings.substringSearch(val, SearchMode.startsWith);
+                repMsg = "created "+st.attrib(rname);
+            }
+            when "endswith" {
+                var truth = st.addEntry(rname, strings.size, bool);
+                truth.a = strings.substringSearch(val, SearchMode.endsWith);
+                repMsg = "created "+st.attrib(rname);
+            }
+            otherwise {
+               return notImplementedError(pn, "subcmd: %s, (%s, %s)".format(
+                         subcmd, objtype, valtype));
+            }
+          }
         }
-        when "startswith" {
-          var truth = st.addEntry(rname, strings.size, bool);
-          truth.a = strings.substringSearch(val, SearchMode.startsWith);
-          repMsg = "created "+st.attrib(rname);
+        otherwise {
+          var errorMsg = "(%s, %s)".format(objtype, valtype);
+          smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);
+          return notImplementedError(pn, errorMsg);
         }
-        when "endswith" {
-          var truth = st.addEntry(rname, strings.size, bool);
-          truth.a = strings.substringSearch(val, SearchMode.endsWith);
-          repMsg = "created "+st.attrib(rname);
-        }
-        otherwise {return notImplementedError(pn, "subcmd: %s, (%s, %s)".format(subcmd, objtype, valtype));}
       }
-    }
-    otherwise {return notImplementedError(pn, "(%s, %s)".format(objtype, valtype));}
-    }
-    return repMsg;
+      smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);
+      return repMsg;
   }
 
 proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
@@ -135,6 +174,10 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
     // check to make sure symbols defined
     st.check(segName);
     st.check(valName);
+
+    smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),
+                         "cmd: %s subcmd: %s objtype: %t valtype: %t".format(
+                          cmd,subcmd,objtype,valtype));
 
     select (objtype, valtype) {
     when ("str", "str") {
@@ -226,6 +269,8 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
         return errorMsg;       
       }
     }
+    
+    smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);
     return repMsg;
   }
 
@@ -249,8 +294,24 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
             forall (h, h1, h2) in zip(hashes, hash1.a, hash2.a) {
                 (h1,h2) = h:(int,int);
             }
+            var repMsg = "created " + st.attrib(name1) + "+created " + st.attrib(name2);
+            smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);
+            return repMsg;
+        }
+/*
+        when "int" {
+            var sarrays = new owned SegSArray(segName, valName, st);
+            var hashes = sarrays.hash();
+            var name1 = st.nextName();
+            var hash1 = st.addEntry(name1, hashes.size, int);
+            var name2 = st.nextName();
+            var hash2 = st.addEntry(name2, hashes.size, int);
+            forall (h, h1, h2) in zip(hashes, hash1.a, hash2.a) {
+                (h1,h2) = h:(int,int);
+            }
             return "created " + st.attrib(name1) + "+created " + st.attrib(name2);
         }
+*/
         otherwise {
             var errorMsg = notImplementedError(pn, objtype);
             smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);      
@@ -301,8 +362,8 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
         var errorMsg = "Error: index out of bounds";
         smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);      
         return errorMsg;
-    } catch {
-        var errorMsg = "Error: unknown cause";
+    } catch e: Error {
+        var errorMsg = "Error: unknown cause %t".format(e);
         smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);      
         return errorMsg;
     }
@@ -328,7 +389,20 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
               // TO DO: in the future, we will force the client to handle this
               idx = convertPythonIndexToChapel(idx, strings.size);
               var s = strings[idx];
-              return "item %s %jt".format("str", s);
+
+              var repMsg = "item %s %jt".format("str", s);
+              smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg); 
+              return repMsg;
+          }
+          when "int" {
+              // Make a temporary int array
+              var arrays = new owned SegSArray(args[1], args[2], st);
+              // Parse the index
+              var idx = args[3]:int;
+              // TO DO: in the future, we will force the client to handle this
+              idx = convertPythonIndexToChapel(idx, arrays.size);
+              var s = arrays[idx];
+              return "item %s %jt".format("int", s);
           }
           otherwise { 
               var errorMsg = notImplementedError(pn, objtype); 
@@ -376,12 +450,42 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
         var newValName = st.nextName();
         // Compute the slice
         var (newSegs, newVals) = strings[slice];
+
         // Store the resulting offsets and bytes arrays
         var newSegsEntry = new shared SymEntry(newSegs);
         var newValsEntry = new shared SymEntry(newVals);
         st.addEntry(newSegName, newSegsEntry);
         st.addEntry(newValName, newValsEntry);
         return "created " + st.attrib(newSegName) + " +created " + st.attrib(newValName);
+      }
+      when "int" {
+        // Make a temporary integer  array
+        var sarrays = new owned SegSArray(args[1], args[2], st);
+        // Parse the slice parameters
+        var start = args[3]:int;
+        var stop = args[4]:int;
+        var stride = args[5]:int;
+        // Only stride-1 slices are allowed for now
+        if (stride != 1) { 
+            var errorMsg = notImplementedError(pn, "stride != 1"); 
+            smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);      
+            return errorMsg;
+        }
+        // TO DO: in the future, we will force the client to handle this
+        var slice: range(stridable=true) = convertPythonSliceToChapel(start, stop, stride);
+        var newSegName = st.nextName();
+        var newValName = st.nextName();
+        // Compute the slice
+        var (newSegs, newVals) = sarrays[slice];
+        // Store the resulting offsets and bytes arrays
+        var newSegsEntry = new shared SymEntry(newSegs);
+        var newValsEntry = new shared SymEntry(newVals);
+        st.addEntry(newSegName, newSegsEntry);
+        st.addEntry(newValName, newValsEntry);
+        
+        var repMsg = "created " + st.attrib(newSegName) + " +created " + st.attrib(newValName);
+        smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),repMsg); 
+        return repMsg;
       }
       otherwise {
           var errorMsg = notImplementedError(pn, objtype);
@@ -412,34 +516,90 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
 
     var newSegName = st.nextName();
     var newValName = st.nextName();
+    
+    smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),
+                                                  "objtype:%s".format(objtype));
+    
     select objtype {
-      when "str" {
-        var strings = new owned SegString(args[1], args[2], st);
-        var iname = args[3];
-        var gIV: borrowed GenSymEntry = st.lookup(iname);
-        select gIV.dtype {
-          when DType.Int64 {
-            var iv = toSymEntry(gIV, int);
-            var (newSegs, newVals) = strings[iv.a];
-            var newSegsEntry = new shared SymEntry(newSegs);
-            var newValsEntry = new shared SymEntry(newVals);
-            st.addEntry(newSegName, newSegsEntry);
-            st.addEntry(newValName, newValsEntry);
-          }
-          when DType.Bool {
-            var iv = toSymEntry(gIV, bool);
-            var (newSegs, newVals) = strings[iv.a];
-            var newSegsEntry = new shared SymEntry(newSegs);
-            var newValsEntry = new shared SymEntry(newVals);
-            st.addEntry(newSegName, newSegsEntry);
-            st.addEntry(newValName, newValsEntry);
-          }
-          otherwise {return notImplementedError(pn,
-                                                "("+objtype+","+dtype2str(gIV.dtype)+")");}
-          }
-      }
-      otherwise {return notImplementedError(pn, objtype);}
-      }
+        when "str" {
+            var strings = new owned SegString(args[1], args[2], st);
+            var iname = args[3];
+            var gIV: borrowed GenSymEntry = st.lookup(iname);
+            try {
+                select gIV.dtype {
+                    when DType.Int64 {
+                        var iv = toSymEntry(gIV, int);
+                        var (newSegs, newVals) = strings[iv.a];
+                        var newSegsEntry = new shared SymEntry(newSegs);
+                        var newValsEntry = new shared SymEntry(newVals);
+                        st.addEntry(newSegName, newSegsEntry);
+                        st.addEntry(newValName, newValsEntry);
+                    }
+                    when DType.Bool {
+                        var iv = toSymEntry(gIV, bool);
+                        var (newSegs, newVals) = strings[iv.a];
+                        var newSegsEntry = new shared SymEntry(newSegs);
+                        var newValsEntry = new shared SymEntry(newVals);
+                        st.addEntry(newSegName, newSegsEntry);
+                        st.addEntry(newValName, newValsEntry);
+                    }
+                    otherwise {
+                        var errorMsg = "("+objtype+","+dtype2str(gIV.dtype)+")";
+                        smLogger.error(getModuleName(),getRoutineName(),
+                                                      getLineNumber(),errorMsg); 
+                        return notImplementedError(pn,errorMsg);
+                    }
+                }
+            } catch e: Error {
+                smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),
+                      e.message());
+                return "Error: %t".format(e.message());
+            }
+        }
+        when "int" {
+            var sarrays = new owned SegSArray(args[1], args[2], st);
+            var iname = args[3];
+            var gIV: borrowed GenSymEntry = st.lookup(iname);
+            try {
+                select gIV.dtype {
+                    when DType.Int64 {
+                        var iv = toSymEntry(gIV, int);
+                        var (newSegs, newVals) = sarrays[iv.a];
+                        var newSegsEntry = new shared SymEntry(newSegs);
+                        var newValsEntry = new shared SymEntry(newVals);
+                        st.addEntry(newSegName, newSegsEntry);
+                        st.addEntry(newValName, newValsEntry);
+                    }
+                    when DType.Bool {
+                        var iv = toSymEntry(gIV, bool);
+                        var (newSegs, newVals) = sarrays[iv.a];
+                        var newSegsEntry = new shared SymEntry(newSegs);
+                        var newValsEntry = new shared SymEntry(newVals);
+                        st.addEntry(newSegName, newSegsEntry);
+                        st.addEntry(newValName, newValsEntry);
+                    }
+                    otherwise {
+                        var errorMsg = "("+objtype+","+dtype2str(gIV.dtype)+")";
+                        smLogger.error(getModuleName(),getRoutineName(),
+                                                      getLineNumber(),errorMsg); 
+                        return notImplementedError(pn,errorMsg);
+                    }
+                }
+            } catch e: Error {
+                smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),
+                      e.message());
+                return "Error: %t".format(e.message());
+            }
+        }
+        otherwise {
+            var errorMsg = "unsupported objtype: %t".format(objtype);
+            smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);
+            return notImplementedError(pn, objtype);
+        }
+    }
+    var repMsg = "created " + st.attrib(newSegName) + "+created " + st.attrib(newValName);
+
+    smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);
     return "created " + st.attrib(newSegName) + "+created " + st.attrib(newValName);
   }
 
@@ -502,6 +662,47 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
     return repMsg;
   }
 
+  proc segBinopvvIntMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
+    var pn = Reflection.getRoutineName();
+    var repMsg: string;
+    var (op,
+         // Type and attrib names of left segmented array
+         ltype, lsegName, lvalName,
+         // Type and attrib names of right segmented array
+         rtype, rsegName, rvalName, leftStr, jsonStr)
+           = payload.decode().splitMsgToTuple(9);
+
+    // check to make sure symbols defined
+    st.check(lsegName);
+    st.check(lvalName);
+    st.check(rsegName);
+    st.check(rvalName);
+
+    select (ltype, rtype) {
+    when ("int", "int") {
+      var lsa = new owned SegSArray(lsegName, lvalName, st);
+      var rsa = new owned SegString(rsegName, rvalName, st);
+      select op {
+        when "==" {
+          var rname = st.nextName();
+          var e = st.addEntry(rname, lsa.size, bool);
+          e.a = (lsa == rsa);
+          repMsg = "created " + st.attrib(rname);
+        }
+        when "!=" {
+          var rname = st.nextName();
+          var e = st.addEntry(rname, lsa.size, bool);
+          e.a = (lsa != rsa);
+          repMsg = "created " + st.attrib(rname);
+        }
+        otherwise {return notImplementedError(pn, ltype, op, rtype);}
+        }
+    }
+    otherwise {return unrecognizedTypeError(pn, "("+ltype+", "+rtype+")");} 
+    }
+    return repMsg;
+  }
+
   proc segBinopvsMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
     var pn = Reflection.getRoutineName();
     var repMsg: string;
@@ -511,7 +712,6 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
     // check to make sure symbols defined
     st.check(segName);
     st.check(valName);
-
     var json = jsonToPdArray(encodedVal, 1);
     var value = json[json.domain.low];
     var rname = st.nextName();
@@ -526,6 +726,42 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
         when "!=" {
           var e = st.addEntry(rname, strings.size, bool);
           e.a = (strings != value);
+        }
+        otherwise {return notImplementedError(pn, objtype, op, valtype);}
+        }
+    }
+    otherwise {return unrecognizedTypeError(pn, "("+objtype+", "+valtype+")");} 
+    }
+    return "created " + st.attrib(rname);
+  }
+
+  proc segBinopvsIntMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
+    var pn = Reflection.getRoutineName();
+    var repMsg: string;
+    var (op, objtype, segName, valName, valtype, encodedVal)
+          = payload.decode().splitMsgToTuple(6);
+
+    // check to make sure symbols defined
+    st.check(segName);
+    st.check(valName);
+    var json = jsonToPdArrayInt(encodedVal, 1);
+    var value = json[json.domain.low];
+    var rname = st.nextName();
+    select (objtype, valtype) {
+    when ("int", "int") {
+      var sarrays  = new owned SegSArray(segName, valName, st);
+      select op {
+        when "==" {
+          var e = st.addEntry(rname, sarrays.size, bool);
+          var tmp=sarrays[sarrays.offsets.aD.low]:int;
+          e.a = (tmp == value);
+//          e.a = (sarrays == value);
+        }
+        when "!=" {
+          var e = st.addEntry(rname, sarrays.size, bool);
+          var tmp=sarrays[sarrays.offsets.aD.low]:int;
+          e.a = (tmp != value);
+//          e.a = (sarrays != value);
         }
         otherwise {return notImplementedError(pn, objtype, op, valtype);}
         }
@@ -573,6 +809,43 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
     return "created " + st.attrib(rname);
   }
 
+  proc segIn1dIntMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
+    var pn = Reflection.getRoutineName();
+    var repMsg: string;
+    var (mainObjtype, mainSegName, mainValName, testObjtype, testSegName,
+         testValName, invertStr) = payload.decode().splitMsgToTuple(7);
+
+    // check to make sure symbols defined
+    st.check(mainSegName);
+    st.check(mainValName);
+    st.check(testSegName);
+    st.check(testValName);
+
+    var invert: bool;
+    if invertStr == "True" {invert = true;}
+    else if invertStr == "False" {invert = false;}
+    else {return "Error: Invalid argument in %s: %s (expected True or False)".format(pn, invertStr);}
+    
+    var rname = st.nextName();
+    select (mainObjtype, testObjtype) {
+    when ("int", "int") {
+      var mainSA = new owned SegSArray(mainSegName, mainValName, st);
+      var testSA = new owned SegSArray(testSegName, testValName, st);
+      var e = st.addEntry(rname, mainSA.size, bool);
+      if invert {
+        e.a = !in1d_Int(mainSA, testSA);
+      } else {
+        e.a = in1d_Int(mainSA, testSA);
+      }
+    }
+    otherwise {
+        var errorMsg = unrecognizedTypeError(pn, "("+mainObjtype+", "+testObjtype+")");
+        smLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);      
+        return errorMsg;            
+      }
+    }
+    return "created " + st.attrib(rname);
+  }
   proc segGroupMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
       var pn = Reflection.getRoutineName();
       var (objtype, segName, valName) = payload.decode().splitMsgToTuple(3);
@@ -596,4 +869,443 @@ proc segmentedPeelMsg(cmd: string, payload: bytes, st: borrowed SymTab): string 
       }
       return "created " + st.attrib(rname);
   }
+
+
+
+  proc segSuffixArrayMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
+      var pn = Reflection.getRoutineName();
+      var (objtype, segName, valName) = payload.decode().splitMsgToTuple(3);
+      var repMsg: string;
+
+      // check to make sure symbols defined
+      st.check(segName);
+      st.check(valName);
+
+      var strings = new owned SegString(segName, valName, st);
+      var size=strings.size;
+      var nBytes = strings.nBytes;
+      var length=strings.getLengths();
+      var offsegs = (+ scan length) - length;
+      var algorithmNum=2:int; //2:"divsufsort";1:SuffixArraySkew
+      select (objtype) {
+          when "str" {
+              // To be checked, I am not sure if this formula can estimate the total memory requirement
+              // Lengths + 2*segs + 2*vals (copied to SymTab)
+              overMemLimit(8*size + 16*size + nBytes);
+
+              //allocate an offset array
+              var sasoff = offsegs;
+              //allocate an values array
+              var sasval:[0..(nBytes-1)] int;
+              //              var lcpval:[0..(nBytes-1)] int; now we will not build the LCP array at the same time
+
+              var i:int;
+              var j:int;
+              forall i in 0..(size-1) do {
+              // the start position of ith string in value array
+
+                var startposition:int;
+                var endposition:int;
+                startposition = offsegs[i];
+                endposition = startposition+length[i]-1;
+                // what we do in the select structure is filling the sasval array with correct index
+                select (algorithmNum) {
+                    when 1 {
+                       var sasize=length[i]:int;
+                       ref strArray=strings.values.a[startposition..endposition];
+                       var tmparray:[0..sasize+2] int;
+                       var intstrArray:[0..sasize+2] int;
+                       var x:int;
+                       var y:int;
+                       forall (x,y) in zip ( intstrArray[0..sasize-1],
+                                strings.values.a[startposition..endposition]) do x=y;
+                       intstrArray[sasize]=0;
+                       intstrArray[sasize+1]=0;
+                       intstrArray[sasize+2]=0;
+                       SuffixArraySkew(intstrArray,tmparray,sasize,256);
+                       for (x, y) in zip(sasval[startposition..endposition], tmparray[0..sasize-1]) do
+                               x = y;
+                    }
+                    when 2 {
+                       var sasize=length[i]:int(32);
+                       var localstrArray:[0..endposition-startposition] uint(8);
+                       var a:int(8);
+                       var b:int(8);
+                       ref strArray=strings.values.a[startposition..endposition];
+                       localstrArray=strArray;
+                       //for all (a,b) in zip (localstrArray[0..sasize-1],strArray) do a=b;
+                       var tmparray:[1..sasize] int(32);
+                       divsufsort(localstrArray,tmparray,sasize);
+                       //divsufsort(strArray,tmparray,sasize);
+                       var x:int;
+                       var y:int(32);
+                       for (x, y) in zip(sasval[startposition..endposition], tmparray[1..sasize]) do
+                            x = y;
+                    }
+                }
+
+/*
+// Here we calculate the lcp(Longest Common Prefix) array value
+                forall j in startposition+1..endposition do{
+                        var tmpcount=0:int;
+                        var tmpbefore=sasval[j-1]:int;
+                        var tmpcur=sasval[j]:int;
+                        var tmplen=min(sasize-tmpcur, sasize-tmpbefore);
+                        var tmpi:int;
+                        for tmpi in 0..tmplen-1 do {
+                            if (intstrArray[tmpbefore]!=intstrArray[tmpcur]) {
+                                 break;
+                            }                        
+                            tmpcount+=1;
+                        } 
+                        lcpval[j]=tmpcount;
+                }
+*/
+              }
+              var segName2 = st.nextName();
+              var valName2 = st.nextName();
+              //              var lcpvalName = st.nextName();
+
+              var segEntry = new shared SymEntry(sasoff);
+              var valEntry = new shared SymEntry(sasval);
+              //              var lcpvalEntry = new shared SymEntry(lcpval);
+              /*
+              valEntry.enhancedInfo=lcpvalName;
+              lcpvalEntry.enhancedInfo=valName2;
+              we have removed enchancedInfo.
+              */
+              st.addEntry(segName2, segEntry);
+              st.addEntry(valName2, valEntry);
+//              st.addEntry(lcpvalName, lcpvalEntry);
+              repMsg = 'created ' + st.attrib(segName2) + '+created ' + st.attrib(valName2);
+              return repMsg;
+
+
+          }
+          otherwise {
+              var errorMsg = notImplementedError(pn, "("+objtype+")");
+              writeln(generateErrorContext(
+                                     msg=errorMsg, 
+                                     lineNumber=getLineNumber(), 
+                                     moduleName=getModuleName(), 
+                                     routineName=getRoutineName(), 
+                                     errorClass="NotImplementedError")); 
+              return errorMsg;            
+          }
+      }
+
+  }
+
+  proc segLCPMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
+      var pn = Reflection.getRoutineName();
+      var (objtype, segName1, valName1,segName2,valName2) = payload.decode().splitMsgToTuple(5);
+      var repMsg: string;
+
+      // check to make sure symbols defined
+      st.check(segName1);
+      st.check(valName1);
+      st.check(segName2);
+      st.check(valName2);
+
+      var suffixarrays = new owned SegSArray(segName1, valName1, st);
+      var size=suffixarrays.size;
+      var nBytes = suffixarrays.nBytes;
+      var length=suffixarrays.getLengths();
+      var offsegs = (+ scan length) - length;
+
+
+      var strings = new owned SegString(segName2, valName2, st);
+
+      select (objtype) {
+          when "int" {
+              // To be checked, I am not sure if this formula can estimate the total memory requirement
+              // Lengths + 2*segs + 2*vals (copied to SymTab)
+              overMemLimit(8*size + 16*size + nBytes);
+
+              //allocate an offset array
+              var sasoff = offsegs;
+              //allocate an values array
+              var lcpval:[0..(nBytes-1)] int;
+
+              var i:int;
+              var j:int;
+              forall i in 0..(size-1) do {
+              // the start position of ith surrix array  in value array
+                var startposition:int;
+                var endposition:int;
+                startposition = offsegs[i];
+                endposition = startposition+length[i]-1;
+
+
+
+
+                var sasize=length[i]:int;
+                ref sufArray=suffixarrays.values.a[startposition..endposition];
+                ref strArray=strings.values.a[startposition..endposition];
+// Here we calculate the lcp(Longest Common Prefix) array value
+                forall j in startposition+1..endposition do{
+                        var tmpcount=0:int;
+                        var tmpbefore=sufArray[j-1]:int;
+                        var tmpcur=sufArray[j]:int;
+                        var tmplen=min(sasize-tmpcur, sasize-tmpbefore);
+                        var tmpi:int;
+                        for tmpi in 0..tmplen-1 do {
+                            if (strArray[tmpbefore]!=strArray[tmpcur]) {
+                                 break;
+                            }                        
+                            tmpbefore+=1;
+                            tmpcur+=1;
+                            tmpcount+=1;
+                        } 
+                        lcpval[j]=tmpcount;
+                }
+              }
+              var lcpsegName = st.nextName();
+              var lcpvalName = st.nextName();
+
+              var lcpsegEntry = new shared SymEntry(sasoff);
+              var lcpvalEntry = new shared SymEntry(lcpval);
+              /*
+              valEntry.enhancedInfo=lcpvalName;
+              lcpvalEntry.enhancedInfo=valName2;
+              we have removed enchancedInfo.
+              */
+              st.addEntry(lcpsegName, lcpsegEntry);
+              st.addEntry(lcpvalName, lcpvalEntry);
+              repMsg = 'created ' + st.attrib(lcpsegName) + '+created ' + st.attrib(lcpvalName);
+              return repMsg;
+
+
+          }
+          otherwise {
+              var errorMsg = notImplementedError(pn, "("+objtype+")");
+              writeln(generateErrorContext(
+                                     msg=errorMsg, 
+                                     lineNumber=getLineNumber(), 
+                                     moduleName=getModuleName(), 
+                                     routineName=getRoutineName(), 
+                                     errorClass="NotImplementedError")); 
+              return errorMsg;            
+          }
+      }
+
+  }
+
+// directly read a string from given file and generate its suffix array
+  proc segSAFileMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
+      var pn = Reflection.getRoutineName();
+//      var (FileName) = payload.decode().splitMsgToTuple(1);
+      var FileName = payload.decode();
+      var repMsg: string;
+
+//      var filesize:int(32);
+      var filesize:int;
+      var f = open(FileName, iomode.r);
+      var size=1:int;
+      var nBytes = f.size;
+      var length:[0..0] int  =nBytes;
+      var offsegs:[0..0] int =0 ;
+
+      var sasize=nBytes:int;
+      var startposition:int;
+      var endposition:int;
+      startposition = 0;
+      endposition = nBytes-1;
+      var strArray:[startposition..endposition]uint(8);
+      var r = f.reader(kind=ionative);
+      r.read(strArray);
+      r.close();
+
+      var segName = st.nextName();
+      var valName = st.nextName();
+
+      var segEntry = new shared SymEntry(offsegs);
+      var valEntry = new shared SymEntry(strArray);
+      st.addEntry(segName, segEntry);
+      st.addEntry(valName, valEntry);
+
+      var algorithmNum=2:int; //2:"divsufsort";1:SuffixArraySkew
+
+      select ("str") {
+          when "str" {
+              // To be checked, I am not sure if this formula can estimate the total memory requirement
+              // Lengths + 2*segs + 2*vals (copied to SymTab)
+              overMemLimit(8*size + 16*size + nBytes);
+
+              //allocate an offset array
+              var sasoff = offsegs;
+              //allocate a suffix array  values array and lcp array
+              var sasval:[0..(nBytes-1)] int;
+//              var lcpval:[0..(nBytes-1)] int;
+
+              var i:int;
+              forall i in 0..(size-1) do {
+              // the start position of ith string in value array
+                select (algorithmNum) {
+                    when 1 {
+                       var sasize=length[i]:int;
+                       var tmparray:[0..sasize+2] int;
+                       var intstrArray:[0..sasize+2] int;
+                       var x:int;
+                       var y:int;
+                       forall (x,y) in zip ( intstrArray[0..sasize-1],strArray[startposition..endposition]) do x=y;
+                       intstrArray[sasize]=0;
+                       intstrArray[sasize+1]=0;
+                       intstrArray[sasize+2]=0;
+                       SuffixArraySkew(intstrArray,tmparray,sasize,256);
+                       for (x, y) in zip(sasval[startposition..endposition], tmparray[0..sasize-1]) do
+                               x = y;
+                    }
+                    when 2 {
+                       var sasize=length[i]:int(32);
+                       //ref strArray=strings.values.a[startposition..endposition];
+                       var tmparray:[1..sasize] int(32);
+                       divsufsort(strArray,tmparray,sasize);
+                       var x:int;
+                       var y:int(32);
+                       for (x, y) in zip(sasval[startposition..endposition], tmparray[1..sasize]) do
+                            x = y;
+                    }
+                }// end of select 
+              } // end of forall
+              var segName2 = st.nextName();
+              var valName2 = st.nextName();
+//              var lcpvalName = st.nextName();
+
+              var segEntry = new shared SymEntry(sasoff);
+              var valEntry = new shared SymEntry(sasval);
+//              var lcpvalEntry = new shared SymEntry(lcpval);
+              /*
+              valEntry.enhancedInfo=lcpvalName;
+              lcpvalEntry.enhancedInfo=valName2;
+              We have removed enhancedInfo.
+              */
+              st.addEntry(segName2, segEntry);
+              st.addEntry(valName2, valEntry);
+//              st.addEntry(lcpvalName, lcpvalEntry);
+              repMsg = 'created ' + st.attrib(segName2) + '+created ' + st.attrib(valName2) 
+                        + '+created ' + st.attrib(segName) + '+created ' + st.attrib(valName);
+              return repMsg;
+
+          }
+          otherwise {
+              var errorMsg = notImplementedError(pn, "("+FileName+")");
+              writeln(generateErrorContext(
+                                     msg=errorMsg, 
+                                     lineNumber=getLineNumber(), 
+                                     moduleName=getModuleName(), 
+                                     routineName=getRoutineName(), 
+                                     errorClass="NotImplementedError")); 
+              return errorMsg;            
+          }
+      }
+
+  }
+
+
+  proc segrmatgenMsg(cmd: string, payload: bytes, st: borrowed SymTab): string throws {
+      var pn = Reflection.getRoutineName();
+      var repMsg: string;
+      var (slgNv, sNe_per_v, sp, sperm )
+          = payload.decode().splitMsgToTuple(4);
+      var lgNv = slgNv: int;
+      var Ne_per_v = sNe_per_v: int;
+      var p = sp: real;
+      var perm = sperm: int;
+
+      var Nv = 2**lgNv:int;
+      // number of edges
+      var Ne = Ne_per_v * Nv:int;
+      // probabilities
+      var a = p;
+      var b = (1.0 - a)/ 3.0:real;
+      var c = b;
+      var d = b;
+      var src: [0..Ne-1] int;
+      var dst: [0..Ne-1] int;
+      var e_weight: [0..Ne-1] real;
+      var v_weight: [0..Nv-1] real;
+      var length: [0..Nv-1] int;
+      var directed:bool;
+      var n_vertices=Nv;
+      var n_edges=Ne;
+      src=1;
+      dst=1;
+      // quantites to use in edge generation loop
+      var ab = a+b:real;
+      var c_norm = c / (c + d):real;
+      var a_norm = a / (a + b):real;
+      // generate edges
+      var src_bit: [0..Ne-1]int;
+      var dst_bit: [0..Ne-1]int;
+      for ib in 1..lgNv {
+          var tmpvar: [0..Ne-1] real;
+          fillRandom(tmpvar);
+          src_bit=tmpvar>ab;
+          fillRandom(tmpvar);
+          dst_bit=tmpvar>(c_norm * src_bit + a_norm * (~ src_bit));
+          src = src + ((2**(ib-1)) * src_bit);
+          dst = dst + ((2**(ib-1)) * dst_bit);
+      }
+      src=src+(src==dst);
+      // maybe: remove edges which are self-loops???
+      var iv = radixSortLSD_ranks(src);
+      // permute into sorted order
+      src = src[iv]; //# permute first vertex into sorted order
+      dst = dst[iv]; //# permute second vertex into sorted order
+      //# to premute/rename vertices
+      var startpos=0, endpos:int;
+      var sort=0:int;
+      while (startpos < Ne-2) {
+         endpos=startpos+1;
+         while (endpos <Ne-1) {
+            if (src[startpos]==src[endpos])  {
+               sort=1;
+               endpos+=1;
+            } else {
+               if (sort==1) {
+                 ref p=dst[startpos..endpos];
+                 var ivx=radixSortLSD_ranks(p);
+                 dst[startpos..endpos]=dst[ivx];
+               } 
+               startpos+=1;
+               break;
+            }
+         }//end of while endpos
+      }//end of while startpos
+
+      fillRandom(e_weight);
+      fillRandom(v_weight);
+      for i in 0..Ne-1 do {
+        length[src[i]]+=1;
+      }
+      var neighbour  = (+ scan length) - length;
+      var srcName = st.nextName();
+      var dstName = st.nextName();
+      var ewName = st.nextName();
+      var vwName = st.nextName();
+      var neiName = st.nextName();
+      var srcEntry = new shared SymEntry(src);
+      var dstEntry = new shared SymEntry(dst);
+      var ewEntry = new shared SymEntry(e_weight);
+      var vwEntry = new shared SymEntry(v_weight);
+      var neiEntry = new shared SymEntry(neighbour);
+      st.addEntry(srcName, srcEntry);
+      st.addEntry(dstName, dstEntry);
+      st.addEntry(ewName, ewEntry);
+      st.addEntry(vwName, vwEntry);
+      st.addEntry(neiName, neiEntry);
+      var sNe=Ne:string;
+      var sNv=Nv:string;
+      var sDirected=directed:string;
+//      repMsg =  (Ne:string) + '+ ' + (Nv:string) + '+ ' + (directed:string) + 
+      repMsg =  sNe + '+ ' + sNv + '+ ' + sDirected + 
+               '+created ' + st.attrib(srcName) + '+created ' + st.attrib(dstName)+ 
+               '+created ' + st.attrib(neiName) + '+created ' + st.attrib(vwName)+ 
+               '+created ' + st.attrib(ewName);
+
+      smLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);      
+      return repMsg;
+  }
+
 }

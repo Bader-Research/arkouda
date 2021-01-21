@@ -62,15 +62,21 @@ proc main() {
     // configure token authentication and server startup message accordingly
     if authenticate {
         serverToken = getArkoudaToken('%s%s%s'.format(arkDirectory, pathSep, 'tokens.txt'));
-        serverMessage = "server listening on tcp://%s:%t?token=%s".format(serverHostname, 
-                                        ServerPort, serverToken);
+        serverMessage = ">>>>>>>>>>>>>>> server listening on tcp://%s:%t?token=%s " +
+                        "<<<<<<<<<<<<<<<".format(serverHostname, ServerPort, serverToken);
     } else {
-        serverMessage = "server listening on tcp://%s:%t".format(serverHostname, ServerPort);
+        serverMessage = ">>>>>>>>>>>>>>> server listening on tcp://%s:%t <<<<<<<<<<<<<<<".format(
+                                        serverHostname, ServerPort);
     }
 
     socket.bind("tcp://*:%t".format(ServerPort));
 
+    const boundary = "**************************************************************************" +
+                   "**************************";
+
+    asLogger.info(getModuleName(), getRoutineName(), getLineNumber(), boundary);
     asLogger.info(getModuleName(), getRoutineName(), getLineNumber(), serverMessage);
+    asLogger.info(getModuleName(), getRoutineName(), getLineNumber(), boundary);
     
     createServerConnectionInfo();
 
@@ -235,8 +241,15 @@ proc main() {
                 when "segmentedIndex"    {repMsg = segmentedIndexMsg(cmd, payload, st);}
                 when "segmentedBinopvv"  {repMsg = segBinopvvMsg(cmd, payload, st);}
                 when "segmentedBinopvs"  {repMsg = segBinopvsMsg(cmd, payload, st);}
+                when "segmentedBinopvvInt"  {repMsg = segBinopvvIntMsg(cmd, payload, st);}
+                when "segmentedBinopvsInt"  {repMsg = segBinopvsIntMsg(cmd, payload, st);}
                 when "segmentedGroup"    {repMsg = segGroupMsg(cmd, payload, st);}
+                when "segmentedSuffixAry"{repMsg = segSuffixArrayMsg(cmd, payload, st);}
+                when "segmentedLCP"      {repMsg = segLCPMsg(cmd, payload, st);}
+                when "segmentedSAFile"   {repMsg = segSAFileMsg(cmd, payload, st);}
+                when "segmentedRMAT"     {repMsg = segrmatgenMsg(cmd, payload, st);}
                 when "segmentedIn1d"     {repMsg = segIn1dMsg(cmd, payload, st);}
+                when "segmentedIn1dInt"     {repMsg = segIn1dIntMsg(cmd, payload, st);}
                 when "lshdf"             {repMsg = lshdfMsg(cmd, payload, st);}
                 when "readhdf"           {repMsg = readhdfMsg(cmd, payload, st);}
                 when "readAllHdf"        {repMsg = readAllHdfMsg(cmd, payload, st);}
